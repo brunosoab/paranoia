@@ -108,16 +108,18 @@ module Paranoia
     destroyed_associations = self.class.reflect_on_all_associations.select do |association|
       association.options[:dependent] == :destroy
     end
-
+    
     destroyed_associations.each do |association|
       association_data = send(association.name)
-
-      unless association_data.nil?
-        if association_data.paranoid?
-          if association.collection?
-            association_data.only_deleted.each { |record| record.restore(:recursive => true) }
-          else
-            association_data.restore(:recursive => true)
+      column_name = "#{association.active_record.name.downcase}_id"
+      
+      if association.klass.paranoid?
+        if association.collection?
+          association_data.only_deleted.each { |record| record.restore(:recursive => true) }
+        else
+          if association.klass.attribute_names.include?(column)
+            record = association.klass.only_deleted.where("#{association.active_record.name.downcase}_id" => self.id).first
+            record.restore(:recursive => true) if record
           end
         end
       end
