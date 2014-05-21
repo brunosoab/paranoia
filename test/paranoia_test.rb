@@ -13,6 +13,8 @@ ActiveRecord::Base.establish_connection :adapter => 'sqlite3', database: ':memor
 ActiveRecord::Base.connection.execute 'CREATE TABLE parent_models (id INTEGER NOT NULL PRIMARY KEY, deleted_at DATETIME)'
 ActiveRecord::Base.connection.execute 'CREATE TABLE paranoid_models (id INTEGER NOT NULL PRIMARY KEY, parent_model_id INTEGER, deleted_at DATETIME)'
 ActiveRecord::Base.connection.execute 'CREATE TABLE paranoid_model_with_belongs (id INTEGER NOT NULL PRIMARY KEY, parent_model_id INTEGER, deleted_at DATETIME, paranoid_model_with_has_one_id INTEGER)'
+ActiveRecord::Base.connection.execute 'CREATE TABLE paranoid_model_with_belong_ones (id INTEGER NOT NULL PRIMARY KEY, parent_model_id INTEGER, deleted_at DATETIME, paranoid_model_with_two_has_one_id INTEGER)'
+ActiveRecord::Base.connection.execute 'CREATE TABLE paranoid_model_with_belong_twos (id INTEGER NOT NULL PRIMARY KEY, parent_model_id INTEGER, deleted_at DATETIME, paranoid_model_with_two_has_one_id INTEGER)'
 ActiveRecord::Base.connection.execute 'CREATE TABLE featureful_models (id INTEGER NOT NULL PRIMARY KEY, deleted_at DATETIME, name VARCHAR(32))'
 ActiveRecord::Base.connection.execute 'CREATE TABLE plain_models (id INTEGER NOT NULL PRIMARY KEY, deleted_at DATETIME)'
 ActiveRecord::Base.connection.execute 'CREATE TABLE callback_models (id INTEGER NOT NULL PRIMARY KEY, deleted_at DATETIME)'
@@ -23,6 +25,9 @@ ActiveRecord::Base.connection.execute 'CREATE TABLE employees (id INTEGER NOT NU
 ActiveRecord::Base.connection.execute 'CREATE TABLE jobs (id INTEGER NOT NULL PRIMARY KEY, employer_id INTEGER NOT NULL, employee_id INTEGER NOT NULL, deleted_at DATETIME)'
 ActiveRecord::Base.connection.execute 'CREATE TABLE custom_column_models (id INTEGER NOT NULL PRIMARY KEY, destroyed_at DATETIME)'
 ActiveRecord::Base.connection.execute 'CREATE TABLE non_paranoid_models (id INTEGER NOT NULL PRIMARY KEY, parent_model_id INTEGER)'
+ActiveRecord::Base.connection.execute 'CREATE TABLE positions (id INTEGER NOT NULL PRIMARY KEY, deleted_at DATETIME)'
+ActiveRecord::Base.connection.execute 'CREATE TABLE referrals (id INTEGER NOT NULL PRIMARY KEY, position_id INTEGER, deleted_at DATETIME)'
+ActiveRecord::Base.connection.execute 'CREATE TABLE position_locations (id INTEGER NOT NULL PRIMARY KEY, position_id INTEGER, deleted_at DATETIME)'
 
 class ParanoiaTest < test_framework
   def setup
@@ -411,6 +416,102 @@ class ParanoiaTest < test_framework
     assert_equal true, hasOne.reload.deleted_at.nil?
     assert_equal true, belongsTo.reload.deleted_at.nil?, "#{belongsTo.deleted_at}"
     assert ParanoidModelWithBelong.with_deleted.reload.count != 0, "There should be a record"
+    assert_equal hasOne.paranoid_model_with_belong, belongsTo
+  end
+
+   def test_restore_with_two_has_one_association
+    # setup and destroy test objects
+    twohasOne = ParanoidModelWithTwoHasOne.create
+    belongsToOne = ParanoidModelWithBelongOne.create
+    belongsToTwo = ParanoidModelWithBelongTwo.create
+    
+    twohasOne.paranoid_model_with_belong_one = belongsToOne
+    twohasOne.paranoid_model_with_belong_two = belongsToTwo
+    twohasOne.save!
+
+    twohasOne.destroy
+    assert_equal false, twohasOne.deleted_at.nil?
+    assert_equal false, belongsToOne.deleted_at.nil?
+    assert_equal false, belongsToTwo.deleted_at.nil?
+
+    # Does it restore two has_one associations?
+    twohasOne.restore(:recursive => true)
+    twohasOne.save!
+
+    # Column deleted_at setted
+    assert_equal true, twohasOne.reload.deleted_at.nil?
+    assert_equal true, belongsToOne.reload.deleted_at.nil?, "#{belongsToOne.deleted_at}"
+    assert_equal true, belongsToTwo.reload.deleted_at.nil?, "#{belongsToTwo.deleted_at}"
+    assert ParanoidModelWithBelongOne.with_deleted.reload.count != 0, "There should be a record"
+    assert ParanoidModelWithBelongTwo.with_deleted.reload.count != 0, "There should be a record"
+
+    assert_equal twohasOne.paranoid_model_with_belong_one, belongsToOne
+    assert_equal twohasOne.paranoid_model_with_belong_two, belongsToTwo
+  end
+
+  def test_restore_with_two_has_one_association_the_first_is_nil
+    # setup and destroy test objects
+    twohasOne = ParanoidModelWithTwoHasOne.create
+    belongsToOne = nil
+    belongsToTwo = ParanoidModelWithBelongTwo.create
+    
+    twohasOne.paranoid_model_with_belong_one = belongsToOne
+    twohasOne.paranoid_model_with_belong_two = belongsToTwo
+    twohasOne.save!
+
+    twohasOne.destroy
+    assert_equal false, twohasOne.deleted_at.nil?
+    assert_equal nil, belongsToOne
+    assert_equal false, belongsToTwo.deleted_at.nil?
+
+    # Does it restore two has_one associations?
+    twohasOne.restore(:recursive => true)
+    twohasOne.save!
+
+    # Column deleted_at setted
+    assert_equal true, twohasOne.reload.deleted_at.nil?
+    assert_equal nil, twohasOne.paranoid_model_with_belong_one
+    assert_equal true, belongsToTwo.reload.deleted_at.nil?, "#{belongsToTwo.deleted_at}"
+
+    assert ParanoidModelWithBelongOne.with_deleted.reload.count == 0, "There should be a record"
+    assert ParanoidModelWithBelongTwo.with_deleted.reload.count != 0, "There should be a record"
+
+    assert_equal twohasOne.paranoid_model_with_belong_one, belongsToOne
+    assert_equal twohasOne.paranoid_model_with_belong_two, belongsToTwo
+  end
+
+  def test_restore_with_has_many_and_has_one_associations
+    # setup and destroy test objects
+    position = Position.create
+    referral1 = Referral.create
+    referral2 = Referral.create
+    position_location = PositionLocation.create
+    
+    position.referrals << referral1
+    position.referrals << referral2
+
+    position.position_location = position_location
+    position.save!
+
+    position.destroy
+
+    assert_equal false, position.deleted_at.nil?
+    assert_equal false, referral1.deleted_at.nil?
+    assert_equal false, referral2.deleted_at.nil?
+    assert_equal false, position_location.deleted_at.nil?
+
+    # Does it restore has_many and has_one associations?
+    position.restore(:recursive => true)
+    position.save!
+
+    assert Position.with_deleted.reload.count != 0, "There should be a record"
+    assert Referral.with_deleted.reload.count != 0, "There should be a record"
+    assert PositionLocation.with_deleted.reload.count != 0, "There should be a record"
+
+    assert position.reload.referrals.include? referral1
+    assert position.reload.referrals.include? referral2
+
+    assert_equal position.position_location, position_location
   end
 
   def test_restore_with_nil_has_one_association
@@ -527,6 +628,22 @@ class Job < ActiveRecord::Base
   belongs_to :employee
 end
 
+class Position < ActiveRecord::Base
+  acts_as_paranoid
+  has_many :referrals, :dependent => :destroy
+  has_one :position_location, :dependent => :destroy
+end
+
+class Referral < ActiveRecord::Base
+  acts_as_paranoid
+  belongs_to :position
+end
+
+class PositionLocation < ActiveRecord::Base
+  acts_as_paranoid
+  belongs_to :position
+end
+
 class CustomColumnModel < ActiveRecord::Base
   acts_as_paranoid column: :destroyed_at
 end
@@ -553,7 +670,22 @@ class ParanoidModelWithHasOne < ParanoidModel
   has_one :paranoid_model_with_belong, :dependent => :destroy
 end
 
+class ParanoidModelWithTwoHasOne < ParanoidModel
+  has_one :paranoid_model_with_belong_one, :dependent => :destroy
+  has_one :paranoid_model_with_belong_two, :dependent => :destroy
+end
+
 class ParanoidModelWithBelong < ActiveRecord::Base
   acts_as_paranoid
   belongs_to :paranoid_model_with_has_one
+end
+
+class ParanoidModelWithBelongOne < ActiveRecord::Base
+  acts_as_paranoid
+  belongs_to :paranoid_model_with_two_has_one
+end
+
+class ParanoidModelWithBelongTwo < ActiveRecord::Base
+  acts_as_paranoid
+  belongs_to :paranoid_model_with_two_has_one
 end
